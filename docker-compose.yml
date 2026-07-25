@@ -1,0 +1,27 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+
+  # Optional Postgres for when DATABASE_URL is switched over from SQLite.
+  # Unused while the app runs on the default sqlite:/// connection string.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: voice_to_action_points
+      POSTGRES_PASSWORD: voice_to_action_points
+      POSTGRES_DB: voice_to_action_points
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

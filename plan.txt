@@ -1,0 +1,89 @@
+# Voice-to-Action-Points Assistant — Full Implementation Plan
+
+## Context
+
+This is a greenfield project — the directory currently contains only the PRD (`Voice_to_Action_Points_PRD.docx`) and an empty venv. The PRD defines a full pipeline: **Capture → Transcribe → Understand → Structure → Hold for approval → Human review → Execute → Audit**, with a hard rule that nothing executes without an explicit human APPROVED state, enforced server-side. Target stack: Python, FastAPI, Azure Speech SDK, OpenAI API, Pydantic, SQLite for now (Postgres-compatible later), Docker.
+
+Per your decisions: transcription and intent extraction sit behind clean interfaces with **mock implementations by default**, so the whole pipeline is runnable and demoable with zero external API keys — real Azure/OpenAI calls are an isolated swap later. Persistence starts on **SQLite** (same SQLAlchemy models will port to Postgres by changing the connection string). This document covers the full PRD end-to-end; implementation still proceeds **one phase at a time** — each phase is built, tested, and checked in with you before moving to the next.
+
+## Final project layout
+
+```
+voice-to-action-points-assistant/
+  app/
+    main.py                 # FastAPI app: mounts routers, DB init on startup
+    config.py                # Settings (pydantic-settings, reads .env)
+    db.py                    # SQLAlchemy engine/session/Base
+    routers/
+      transcribe.py          # /transcribe, /transcribe/stream (ws)
+      action_points.py       # /action-points (create/list/detail)
+      approval.py            # /action-points/{id}/approve, /reject
+      execute.py             # /action-points/{id}/execute
+      audit.py               # /audit-log (read-only)
+  voice/
+    base.py                  # Transcriber ABC + TranscriptionResult schema
+    mock_transcriber.py      # MockTranscriber (file + simulated streaming)
+    azure_transcriber.py     # AzureTranscriber (real azure-cognitiveservices-speech)
+    factory.py                # get_transcriber(settings)
+  orchestration/
+    intent.py                 # IntentExtractor ABC + MockIntentExtractor + OpenAIIntentExtractor
+    action_points.py          # ActionPoint Pydantic + SQLAlchemy models, enums, builder fn
+  approval/
+    gate.py                    # state machine: approve()/reject(), enforces legal transitions
+  executor/
+    run.py                     # mock integrations, execute() — enforces APPROVED server-side
+  audit/
+    log.py                      # AuditLog model (append-only), record_event() helper
+  tests/
+    test_transcribe_endpoint.py
+    test_intent_extraction.py
+    test_action_point_schema.py
+    test_approval_gate.py
+    test_executor.py
+    test_audit_log.py
+    test_end_to_end_flow.py       # happy path + rejected path + "execute without approval blocked"
+  requirements.txt
+  .env.example
+  .gitignore
+  README.md
+  Dockerfile
+  docker-compose.yml               # optional Postgres service for later swap
+  plan.txt                          # this plan, saved for reference
+```
+
+## Data model
+
+**ActionPoint** (Pydantic schema, backed by SQLAlchemy table `action_points`)
+- `id` (UUID), `transcript` (str), `confidence` (float)
+- `intent` (str), `entities` (JSON dict), `risk_level` (enum: LOW/MEDIUM/HIGH)
+- `status` (enum: CREATED, PENDING_APPROVAL, APPROVED, REJECTED, EXECUTED)
+- `created_at`, `approver` (str|None), `approved_at`, `executed_at`, `execution_result` (JSON|None)
+
+**AuditLog** (SQLAlchemy table `audit_log`, insert-only — no update/delete code path exists anywhere)
+- `id`, `action_point_id` (FK), `event_type` (CREATED/PROPOSED/APPROVED/REJECTED/EXECUTED/EXECUTION_FAILED), `actor`, `payload` (JSON snapshot), `timestamp`
+
+**State machine** (`approval/gate.py`): `CREATED → PENDING_APPROVAL → APPROVED → EXECUTED`, with `PENDING_APPROVAL → REJECTED` as the only other exit. Illegal transitions raise an `InvalidTransition` error. The executor independently re-checks `status == APPROVED` before running (not just the router), so approval can't be bypassed by calling the executor directly — this is the PRD's core security requirement.
+
+## Phases
+
+**Phase 0 — Setup**: repo scaffold (dirs above), `config.py` (Settings for transcriber/intent backend selection + Azure/OpenAI keys, all optional so mock mode needs none), `requirements.txt`, `.env.example`, `.gitignore`, `Dockerfile` + `docker-compose.yml` (app + optional Postgres service, unused while on SQLite), `README.md` skeleton, `git init` + first commit, this plan saved as `plan.txt`.
+
+**Phase 1 — Transcription** (`voice/`): `Transcriber` ABC (`transcribe_file`, async `stream`); `MockTranscriber` (canned text + fabricated confidence + simulated latency, streaming yields partials then a final); `AzureTranscriber` (real SDK: `recognize_once` for file mode, `PushAudioInputStream` + continuous recognition bridged to an `asyncio.Queue` for streaming); `factory.get_transcriber()` picks impl from `settings.transcriber_backend` (default `mock`). Endpoints: `POST /transcribe` (multipart upload), `WS /transcribe/stream`. Tests cover both via the mock backend.
+
+**Phase 2 — Understand + Structure** (`orchestration/`): `IntentExtractor` ABC; `MockIntentExtractor` (deterministic keyword rules, e.g. "email"→`send_email`, "meeting"→`schedule_meeting`, else `unknown`); `OpenAIIntentExtractor` (strict JSON-mode system prompt, Pydantic-validated response, one retry on malformed output then raises — satisfies FR-4 and the PRD's "malformed/unsafe output" risk mitigation). `action_points.py` builder combines transcript + intent result into a schema-validated `ActionPoint`, persisted with `status=PENDING_APPROVAL`. DB wiring (`db.py`, SQLite file) added here since this is the first phase that needs persistence. Endpoints: `POST /action-points` (transcript+confidence in → validated, persisted ActionPoint out), `GET /action-points`, `GET /action-points/{id}`.
+
+**Phase 3 — Human approval gate** (`approval/gate.py`): `approve(action_point, approver)` / `reject(action_point, approver, reason)`, enforcing the state machine above; writes an audit event on every transition (audit module stubbed minimally here, fully built in Phase 4). Endpoints: `POST /action-points/{id}/approve`, `POST /action-points/{id}/reject`. This is called out in the PRD as the core value of the product, so tests explicitly cover illegal transitions (e.g. approving an already-EXECUTED action) failing loudly.
+
+**Phase 4 — Execute + Audit** (`executor/run.py`, `audit/log.py`): mock integrations dict keyed by intent (`send_email`, `schedule_meeting`, etc.) each returning a fake result payload; `execute()` re-verifies `status == APPROVED` server-side, updates to `EXECUTED` with `execution_result`, and records an audit event; on handler failure records `EXECUTION_FAILED` and leaves status `APPROVED` for retry. `audit/log.py` provides `record_event()` (insert-only) used by every prior phase's transition points. Endpoints: `POST /action-points/{id}/execute`, `GET /audit-log` (read-only, filterable by `action_point_id`).
+
+**Phase 5 — Wiring, metrics, polish**: mount all routers in `app/main.py`; add a small timing/logging middleware so every stage's latency is observable (FR-11); flesh out `README.md` with a full curl walkthrough of the end-to-end flow (transcribe → propose → approve → execute → audit); `test_end_to_end_flow.py` covering the happy path, the rejected path, and confirming execution is impossible without approval (FR-6/FR-9 and the PRD's success metric "0 unauthorized executions").
+
+## Verification (per phase, using the mock backends — no external keys required)
+
+1. `pip install -r requirements.txt`; `uvicorn app.main:app --reload` starts cleanly.
+2. `pytest` passes for that phase's tests.
+3. Manual curl smoke test for the phase's new endpoint(s), e.g. by Phase 5: transcribe → create action point → approve → execute → check it shows up in `/audit-log`, and confirm `POST /execute` on a non-approved action point returns an error.
+
+## Not building now (explicitly deferred, per PRD's Non-Goals / Future Enhancements)
+
+Real downstream integrations, multi-user auth/roles beyond a single approver field, mobile app, RBAC/multi-approver workflows, voice biometrics, configurable risk-tier auto-routing, web UI.
