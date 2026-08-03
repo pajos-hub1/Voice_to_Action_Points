@@ -21,7 +21,7 @@ mic / audio file
 This project is being built one phase at a time. See `plan.txt` for the full breakdown; each phase is implemented, tested, and reviewed before moving to the next.
 
 - [x] Phase 0 — Setup
-- [ ] Phase 1 — Transcription
+- [x] Phase 1 — Transcription
 - [ ] Phase 2 — Intent extraction + Action Points
 - [ ] Phase 3 — Human approval gate
 - [ ] Phase 4 — Executor + audit log
