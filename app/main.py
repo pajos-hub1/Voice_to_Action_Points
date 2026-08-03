@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import init_db
-from app.routers import action_points, approval, transcribe
+from app.routers import action_points, approval, audit, execute, transcribe
 
 
 @asynccontextmanager
@@ -23,6 +23,8 @@ app = FastAPI(
 app.include_router(transcribe.router)
 app.include_router(action_points.router)
 app.include_router(approval.router)
+app.include_router(execute.router)
+app.include_router(audit.router)
 
 
 @app.get("/health")

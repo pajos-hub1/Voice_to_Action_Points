@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import JSON, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -20,6 +21,17 @@ class AuditLogModel(Base):
     actor: Mapped[str] = mapped_column(String, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AuditLogEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    action_point_id: str
+    event_type: str
+    actor: str
+    payload: dict[str, Any]
+    timestamp: datetime
 
 
 def record_event(
