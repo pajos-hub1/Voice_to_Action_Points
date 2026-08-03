@@ -16,16 +16,18 @@ mic / audio file
   -> Append-only audit log
 ```
 
+State machine: `CREATED -> PENDING_APPROVAL -> APPROVED -> EXECUTED`, with `PENDING_APPROVAL -> REJECTED` as the only other exit. Execution is enforced server-side (`executor/run.py`) independent of the API layer — approval can't be bypassed by calling the executor directly.
+
 ## Status
 
-This project is being built one phase at a time. See `plan.txt` for the full breakdown; each phase is implemented, tested, and reviewed before moving to the next.
+All phases from `plan.txt` are complete.
 
 - [x] Phase 0 — Setup
 - [x] Phase 1 — Transcription
 - [x] Phase 2 — Intent extraction + Action Points
 - [x] Phase 3 — Human approval gate
 - [x] Phase 4 — Executor + audit log
-- [ ] Phase 5 — Wiring, metrics, polish
+- [x] Phase 5 — Wiring, metrics, polish
 
 ## Setup
 
@@ -55,6 +57,61 @@ curl localhost:8000/health
 pytest
 ```
 
+## End-to-end walkthrough (curl)
+
+Every request is logged with its latency and returns an `X-Process-Time-Ms` header (FR-11).
+
+**1. Transcribe** an audio file (mock backend returns a canned transcript):
+
+```bash
+curl -s -F "file=@sample.wav;type=audio/wav" localhost:8000/transcribe
+# {"text":"please schedule a meeting with the design team for tomorrow at 3pm","confidence":0.93,...}
+```
+
+For real-time streaming, connect to `ws://localhost:8000/transcribe/stream`, send binary audio chunks, then send the text message `EOS` to get partial results followed by a final one.
+
+**2. Propose** an Action Point from the transcript (runs intent extraction, validates against the schema, persists with `PENDING_APPROVAL`):
+
+```bash
+ID=$(curl -s -X POST localhost:8000/action-points \
+  -H "Content-Type: application/json" \
+  -d '{"transcript":"please schedule a meeting with the design team for tomorrow at 3pm","confidence":0.93}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+```
+
+**3. Try to execute early — blocked** (this is the control point; nothing runs without approval):
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8000/action-points/$ID/execute
+# 409
+```
+
+**4. Approve or reject** — a human makes the call:
+
+```bash
+curl -s -X POST localhost:8000/action-points/$ID/approve -H "Content-Type: application/json" -d '{"approver":"alice"}'
+# status: APPROVED
+
+# or, to reject instead:
+# curl -s -X POST localhost:8000/action-points/$ID/reject -H "Content-Type: application/json" -d '{"approver":"alice","reason":"not needed"}'
+```
+
+**5. Execute** the approved Action Point against the mock integrations:
+
+```bash
+curl -s -X POST localhost:8000/action-points/$ID/execute
+# status: EXECUTED, execution_result: {...}
+```
+
+**6. Audit** — every step is traceable to the transcript and the approver:
+
+```bash
+curl -s "localhost:8000/audit-log?action_point_id=$ID"
+# [{"event_type":"PROPOSED",...}, {"event_type":"APPROVED","actor":"alice",...}, {"event_type":"EXECUTED",...}]
+```
+
+Other useful endpoints: `GET /action-points` (list, optional `?status_filter=`), `GET /action-points/{id}` (detail), `GET /audit-log` (all events, no filter).
+
 ## Switching to real Azure Speech / OpenAI
 
 Set in `.env`:
@@ -69,3 +126,11 @@ OPENAI_API_KEY=...
 ```
 
 No code changes needed — both backends are selected via a factory behind a shared interface.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+Runs the app against the bundled Postgres service. Set `DATABASE_URL=postgresql://voice_to_action_points:voice_to_action_points@db:5432/voice_to_action_points` in `.env` to use it instead of the default SQLite file.

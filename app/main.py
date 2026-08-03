@@ -1,10 +1,14 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.db import init_db
+from app.middleware import log_request_latency
 from app.routers import action_points, approval, audit, execute, transcribe
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 @asynccontextmanager
@@ -19,6 +23,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.middleware("http")(log_request_latency)
 
 app.include_router(transcribe.router)
 app.include_router(action_points.router)
