@@ -17,6 +17,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def init_db() -> None:
+    from audit import log  # noqa: F401  registers ORM models on Base
     from orchestration import action_points  # noqa: F401  registers ORM models on Base
 
     Base.metadata.create_all(bind=engine)

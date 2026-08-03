@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.dependencies import get_intent_extractor_dep
+from audit.log import record_event
 from orchestration.action_points import ActionPoint, ActionPointModel, build_action_point
 from orchestration.enums import ActionPointStatus
 from orchestration.intent import IntentExtractor
@@ -29,6 +30,14 @@ def create_action_point(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    record_event(
+        db,
+        action_point_id=row.id,
+        event_type="PROPOSED",
+        actor="system",
+        payload={"transcript": row.transcript, "intent": row.intent, "risk_level": row.risk_level},
+    )
     return ActionPoint.model_validate(row)
 
 

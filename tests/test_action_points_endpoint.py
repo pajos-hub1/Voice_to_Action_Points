@@ -1,3 +1,4 @@
+from audit.log import AuditLogModel
 from orchestration.enums import ActionPointStatus, RiskLevel
 
 
@@ -40,3 +41,11 @@ def test_list_and_get_action_point(client) -> None:
 def test_get_missing_action_point_returns_404(client) -> None:
     response = client.get("/action-points/does-not-exist")
     assert response.status_code == 404
+
+
+def test_create_action_point_writes_proposed_audit_event(client, db_session) -> None:
+    response = client.post("/action-points", json={"transcript": "schedule a meeting", "confidence": 0.9})
+    action_point_id = response.json()["id"]
+
+    events = db_session.query(AuditLogModel).filter_by(action_point_id=action_point_id).all()
+    assert any(e.event_type == "PROPOSED" for e in events)

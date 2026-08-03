@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from audit import log  # noqa: F401  registers ORM models on Base
 from orchestration import action_points  # noqa: F401  registers ORM models on Base
 
 
