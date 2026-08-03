@@ -22,7 +22,7 @@ This project is being built one phase at a time. See `plan.txt` for the full bre
 
 - [x] Phase 0 — Setup
 - [x] Phase 1 — Transcription
-- [ ] Phase 2 — Intent extraction + Action Points
+- [x] Phase 2 — Intent extraction + Action Points
 - [ ] Phase 3 — Human approval gate
 - [ ] Phase 4 — Executor + audit log
 - [ ] Phase 5 — Wiring, metrics, polish
