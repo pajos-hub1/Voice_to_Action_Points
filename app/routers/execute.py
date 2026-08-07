@@ -8,6 +8,9 @@ from orchestration.action_points import ActionPoint, ActionPointModel
 
 router = APIRouter(prefix="/action-points", tags=["execution"])
 
+# Sync def: execution performs blocking DB writes and mock integration calls; FastAPI
+# runs this handler in a threadpool so the event loop is never blocked.
+
 
 def _get_action_point_or_404(db: Session, action_point_id: str) -> ActionPointModel:
     row = db.get(ActionPointModel, action_point_id)

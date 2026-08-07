@@ -15,6 +15,9 @@ async def transcribe(
     transcriber: Transcriber = Depends(get_transcriber_dep),
 ) -> TranscriptionResult:
     audio_bytes = await file.read()
+    # transcribe_file() is blocking (Azure Speech SDK, or the mock's sleep).
+    # asyncio.to_thread keeps it off the event loop — keep this offload if
+    # this handler is ever changed.
     return await asyncio.to_thread(transcriber.transcribe_file, audio_bytes, file.content_type or "audio/wav")
 
 

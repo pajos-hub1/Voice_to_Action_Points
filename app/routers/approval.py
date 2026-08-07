@@ -10,6 +10,9 @@ from orchestration.action_points import ActionPoint, ActionPointModel
 
 router = APIRouter(prefix="/action-points", tags=["approval"])
 
+# Sync def: the approval gate performs blocking DB writes and audit inserts. FastAPI
+# runs these handlers in a threadpool, so the event loop is never blocked.
+
 
 class ApprovalRequest(BaseModel):
     approver: str = Field(min_length=1)

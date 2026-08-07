@@ -6,6 +6,8 @@ from audit.log import AuditLogEntry, AuditLogModel
 
 router = APIRouter(prefix="/audit-log", tags=["audit"])
 
+# Sync def: a read-only DB query, run in FastAPI's threadpool.
+
 
 @router.get("", response_model=list[AuditLogEntry])
 def list_audit_log(action_point_id: str | None = None, db: Session = Depends(get_db)) -> list[AuditLogEntry]:

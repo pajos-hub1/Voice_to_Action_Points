@@ -11,6 +11,10 @@ from orchestration.intent import IntentExtractor
 
 router = APIRouter(prefix="/action-points", tags=["action-points"])
 
+# All handlers below are sync def: FastAPI runs them in its threadpool, keeping the
+# blocking DB I/O and intent-extraction calls (e.g. the OpenAI HTTP request) off the
+# event loop. Don't convert them to async def without explicitly offloading that work.
+
 
 class CreateActionPointRequest(BaseModel):
     transcript: str = Field(min_length=1)
