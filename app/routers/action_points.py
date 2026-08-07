@@ -28,8 +28,6 @@ def create_action_point(
 
     row = ActionPointModel(**action_point.model_dump())
     db.add(row)
-    db.commit()
-    db.refresh(row)
 
     record_event(
         db,
@@ -38,6 +36,9 @@ def create_action_point(
         actor="system",
         payload={"transcript": row.transcript, "intent": row.intent, "risk_level": row.risk_level},
     )
+
+    db.commit()
+    db.refresh(row)
     return ActionPoint.model_validate(row)
 
 

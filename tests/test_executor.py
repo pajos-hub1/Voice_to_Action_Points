@@ -50,3 +50,23 @@ def test_execute_unknown_intent_fails_and_leaves_status_approved(db_session) -> 
 
     events = db_session.query(AuditLogModel).filter_by(action_point_id=row.id).all()
     assert any(e.event_type == "EXECUTION_FAILED" for e in events)
+
+
+def test_execute_is_atomic_with_audit_write(db_session, monkeypatch) -> None:
+    row = _make_row(db_session)
+    approve(db_session, row, approver="alice")
+
+    def fail_audit_write(*args, **kwargs):
+        raise RuntimeError("audit write failed")
+
+    monkeypatch.setattr("executor.run.record_event", fail_audit_write)
+
+    with pytest.raises(RuntimeError):
+        execute(db_session, row)
+
+    db_session.expire_all()
+    fresh = db_session.get(ActionPointModel, row.id)
+    assert fresh.status == ActionPointStatus.APPROVED.value
+    assert fresh.execution_result is None
+    events = db_session.query(AuditLogModel).filter_by(action_point_id=row.id).all()
+    assert [e.event_type for e in events] == ["APPROVED"]

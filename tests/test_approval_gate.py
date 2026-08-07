@@ -64,3 +64,21 @@ def test_cannot_approve_rejected_action_point(db_session) -> None:
 
     with pytest.raises(InvalidTransition):
         approve(db_session, row, approver="alice")
+
+
+def test_approve_is_atomic_with_audit_write(db_session, monkeypatch) -> None:
+    row = _make_action_point_row(db_session)
+
+    def fail_audit_write(*args, **kwargs):
+        raise RuntimeError("audit write failed")
+
+    monkeypatch.setattr("approval.gate.record_event", fail_audit_write)
+
+    with pytest.raises(RuntimeError):
+        approve(db_session, row, approver="alice")
+
+    db_session.expire_all()
+    fresh = db_session.get(ActionPointModel, row.id)
+    assert fresh.status == ActionPointStatus.PENDING_APPROVAL.value
+    assert fresh.approver is None
+    assert db_session.query(AuditLogModel).filter_by(action_point_id=row.id).count() == 0

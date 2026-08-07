@@ -49,7 +49,7 @@ def record_event(
         payload=payload or {},
         timestamp=datetime.now(timezone.utc),
     )
+    # No commit here: the caller's state mutation and this audit write must land
+    # in the SAME transaction, so a crash can't leave one without the other.
     db.add(entry)
-    db.commit()
-    db.refresh(entry)
     return entry

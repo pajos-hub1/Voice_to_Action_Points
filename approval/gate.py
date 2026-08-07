@@ -22,8 +22,6 @@ def approve(db: Session, action_point: ActionPointModel, approver: str) -> Actio
     action_point.approver = approver
     action_point.approved_at = datetime.now(timezone.utc)
     db.add(action_point)
-    db.commit()
-    db.refresh(action_point)
 
     record_event(
         db,
@@ -32,6 +30,9 @@ def approve(db: Session, action_point: ActionPointModel, approver: str) -> Actio
         actor=approver,
         payload={"transcript": action_point.transcript, "intent": action_point.intent},
     )
+
+    db.commit()
+    db.refresh(action_point)
     return action_point
 
 
@@ -45,8 +46,6 @@ def reject(db: Session, action_point: ActionPointModel, approver: str, reason: s
     action_point.status = ActionPointStatus.REJECTED.value
     action_point.approver = approver
     db.add(action_point)
-    db.commit()
-    db.refresh(action_point)
 
     record_event(
         db,
@@ -55,4 +54,7 @@ def reject(db: Session, action_point: ActionPointModel, approver: str, reason: s
         actor=approver,
         payload={"transcript": action_point.transcript, "intent": action_point.intent, "reason": reason},
     )
+
+    db.commit()
+    db.refresh(action_point)
     return action_point

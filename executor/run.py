@@ -64,6 +64,7 @@ def execute(db: Session, action_point: ActionPointModel, actor: str = "system") 
             actor=actor,
             payload={"error": f"No mock integration registered for intent {action_point.intent!r}"},
         )
+        db.commit()
         raise ExecutionFailed(f"No mock integration registered for intent {action_point.intent!r}")
 
     try:
@@ -76,14 +77,13 @@ def execute(db: Session, action_point: ActionPointModel, actor: str = "system") 
             actor=actor,
             payload={"error": str(error)},
         )
+        db.commit()
         raise ExecutionFailed(str(error)) from error
 
     action_point.status = ActionPointStatus.EXECUTED.value
     action_point.executed_at = datetime.now(timezone.utc)
     action_point.execution_result = result
     db.add(action_point)
-    db.commit()
-    db.refresh(action_point)
 
     record_event(
         db,
@@ -92,4 +92,7 @@ def execute(db: Session, action_point: ActionPointModel, actor: str = "system") 
         actor=actor,
         payload={"intent": action_point.intent, "result": result},
     )
+
+    db.commit()
+    db.refresh(action_point)
     return action_point
