@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from audit.log import record_event
@@ -11,21 +12,38 @@ class InvalidTransition(RuntimeError):
     """Raised when approve/reject is attempted from a status other than PENDING_APPROVAL."""
 
 
+def _current_status(db: Session, action_point_id: str) -> str:
+    row = db.get(ActionPointModel, action_point_id)
+    return row.status if row is not None else "<deleted>"
+
+
 def approve(db: Session, action_point: ActionPointModel, approver: str) -> ActionPointModel:
-    if action_point.status != ActionPointStatus.PENDING_APPROVAL.value:
+    action_point_id = action_point.id
+    # Guarded UPDATE: the status is re-checked atomically at write time, so two
+    # concurrent approves can't both pass — only one wins the row, the other
+    # matches zero rows and fails.
+    result = db.execute(
+        update(ActionPointModel)
+        .where(
+            ActionPointModel.id == action_point_id,
+            ActionPointModel.status == ActionPointStatus.PENDING_APPROVAL.value,
+        )
+        .values(
+            status=ActionPointStatus.APPROVED.value,
+            approver=approver,
+            approved_at=datetime.now(timezone.utc),
+        )
+    )
+    if result.rowcount == 0:
+        db.rollback()
         raise InvalidTransition(
-            f"Cannot approve Action Point {action_point.id} from status {action_point.status!r}; "
+            f"Cannot approve Action Point {action_point_id} from status {_current_status(db, action_point_id)!r}; "
             f"only {ActionPointStatus.PENDING_APPROVAL.value} can be approved."
         )
 
-    action_point.status = ActionPointStatus.APPROVED.value
-    action_point.approver = approver
-    action_point.approved_at = datetime.now(timezone.utc)
-    db.add(action_point)
-
     record_event(
         db,
-        action_point_id=action_point.id,
+        action_point_id=action_point_id,
         event_type="APPROVED",
         actor=approver,
         payload={"transcript": action_point.transcript, "intent": action_point.intent},
@@ -37,19 +55,25 @@ def approve(db: Session, action_point: ActionPointModel, approver: str) -> Actio
 
 
 def reject(db: Session, action_point: ActionPointModel, approver: str, reason: str | None = None) -> ActionPointModel:
-    if action_point.status != ActionPointStatus.PENDING_APPROVAL.value:
+    action_point_id = action_point.id
+    result = db.execute(
+        update(ActionPointModel)
+        .where(
+            ActionPointModel.id == action_point_id,
+            ActionPointModel.status == ActionPointStatus.PENDING_APPROVAL.value,
+        )
+        .values(status=ActionPointStatus.REJECTED.value, approver=approver)
+    )
+    if result.rowcount == 0:
+        db.rollback()
         raise InvalidTransition(
-            f"Cannot reject Action Point {action_point.id} from status {action_point.status!r}; "
+            f"Cannot reject Action Point {action_point_id} from status {_current_status(db, action_point_id)!r}; "
             f"only {ActionPointStatus.PENDING_APPROVAL.value} can be rejected."
         )
 
-    action_point.status = ActionPointStatus.REJECTED.value
-    action_point.approver = approver
-    db.add(action_point)
-
     record_event(
         db,
-        action_point_id=action_point.id,
+        action_point_id=action_point_id,
         event_type="REJECTED",
         actor=approver,
         payload={"transcript": action_point.transcript, "intent": action_point.intent, "reason": reason},

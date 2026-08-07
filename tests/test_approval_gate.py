@@ -1,5 +1,8 @@
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.db import Base
 from approval.gate import InvalidTransition, approve, reject
 from audit.log import AuditLogModel
 from orchestration.action_points import ActionPointModel, build_action_point
@@ -77,8 +80,42 @@ def test_approve_is_atomic_with_audit_write(db_session, monkeypatch) -> None:
     with pytest.raises(RuntimeError):
         approve(db_session, row, approver="alice")
 
-    db_session.expire_all()
+    db_session.rollback()  # simulates the DB rolling back a transaction closed mid-write
     fresh = db_session.get(ActionPointModel, row.id)
     assert fresh.status == ActionPointStatus.PENDING_APPROVAL.value
     assert fresh.approver is None
     assert db_session.query(AuditLogModel).filter_by(action_point_id=row.id).count() == 0
+
+
+def test_concurrent_approve_only_one_wins(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'race.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine)
+    s1 = sessionmaker(bind=engine, expire_on_commit=False)()
+    s2 = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        intent_result = IntentResult(intent="schedule_meeting", risk_level=RiskLevel.LOW)
+        action_point = build_action_point("schedule a meeting", 0.9, intent_result)
+        row = ActionPointModel(**action_point.model_dump())
+        s1.add(row)
+        s1.commit()
+
+        row_a = s1.get(ActionPointModel, row.id)
+        row_b = s2.get(ActionPointModel, row.id)
+        s2.commit()  # release s2's read lock; row_b is now a stale PENDING_APPROVAL snapshot
+
+        approve(s1, row_a, approver="alice")
+        with pytest.raises(InvalidTransition):
+            approve(s2, row_b, approver="bob")
+
+        approved_events = (
+            s1.query(AuditLogModel).filter_by(action_point_id=row.id, event_type="APPROVED").all()
+        )
+        assert len(approved_events) == 1
+        assert s1.get(ActionPointModel, row.id).approver == "alice"
+    finally:
+        s1.close()
+        s2.close()
+        engine.dispose()

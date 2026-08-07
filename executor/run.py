@@ -2,6 +2,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from audit.log import record_event
@@ -46,48 +47,77 @@ MOCK_INTEGRATIONS: dict[str, Callable[[ActionPointModel], dict[str, Any]]] = {
 }
 
 
+def _current_status(db: Session, action_point_id: str) -> str:
+    row = db.get(ActionPointModel, action_point_id)
+    return row.status if row is not None else "<deleted>"
+
+
+def _revert_claim(db: Session, action_point_id: str, actor: str, error: str) -> None:
+    db.execute(
+        update(ActionPointModel)
+        .where(
+            ActionPointModel.id == action_point_id,
+            ActionPointModel.status == ActionPointStatus.EXECUTED.value,
+        )
+        .values(status=ActionPointStatus.APPROVED.value, executed_at=None, execution_result=None)
+    )
+    record_event(
+        db,
+        action_point_id=action_point_id,
+        event_type="EXECUTION_FAILED",
+        actor=actor,
+        payload={"error": error},
+    )
+    db.commit()
+
+
 def execute(db: Session, action_point: ActionPointModel, actor: str = "system") -> ActionPointModel:
     # Re-checked here, independent of any router-level check — approval can't be bypassed
-    # by calling this function directly.
-    if action_point.status != ActionPointStatus.APPROVED.value:
+    # by calling this function directly. The APPROVED->EXECUTED transition is an atomic
+    # guarded UPDATE, so two concurrent executes can't both run the integration.
+    action_point_id = action_point.id
+    claim = db.execute(
+        update(ActionPointModel)
+        .where(
+            ActionPointModel.id == action_point_id,
+            ActionPointModel.status == ActionPointStatus.APPROVED.value,
+        )
+        .values(status=ActionPointStatus.EXECUTED.value, executed_at=datetime.now(timezone.utc))
+    )
+    if claim.rowcount == 0:
+        db.rollback()
         raise ExecutionNotAllowed(
-            f"Cannot execute Action Point {action_point.id} from status {action_point.status!r}; "
+            f"Cannot execute Action Point {action_point_id} from status {_current_status(db, action_point_id)!r}; "
             f"only {ActionPointStatus.APPROVED.value} can be executed."
         )
 
     handler = MOCK_INTEGRATIONS.get(action_point.intent)
     if handler is None:
-        record_event(
-            db,
-            action_point_id=action_point.id,
-            event_type="EXECUTION_FAILED",
-            actor=actor,
-            payload={"error": f"No mock integration registered for intent {action_point.intent!r}"},
-        )
-        db.commit()
-        raise ExecutionFailed(f"No mock integration registered for intent {action_point.intent!r}")
+        error = f"No mock integration registered for intent {action_point.intent!r}"
+        _revert_claim(db, action_point_id, actor, error)
+        raise ExecutionFailed(error)
 
     try:
         result = handler(action_point)
     except Exception as error:  # noqa: BLE001 — any handler failure must be recorded, not just known types
-        record_event(
-            db,
-            action_point_id=action_point.id,
-            event_type="EXECUTION_FAILED",
-            actor=actor,
-            payload={"error": str(error)},
-        )
-        db.commit()
+        _revert_claim(db, action_point_id, actor, str(error))
         raise ExecutionFailed(str(error)) from error
 
-    action_point.status = ActionPointStatus.EXECUTED.value
-    action_point.executed_at = datetime.now(timezone.utc)
-    action_point.execution_result = result
-    db.add(action_point)
+    finalized = db.execute(
+        update(ActionPointModel)
+        .where(
+            ActionPointModel.id == action_point_id,
+            ActionPointModel.status == ActionPointStatus.EXECUTED.value,
+        )
+        .values(execution_result=result)
+    )
+    if finalized.rowcount == 0:  # pragma: no cover - only reachable if the claim was reverted concurrently
+        db.rollback()
+        raise ExecutionFailed("Execution claim was lost before the result could be recorded.")
 
     record_event(
         db,
-        action_point_id=action_point.id,
+        action_point_id=action_point_id,
         event_type="EXECUTED",
         actor=actor,
         payload={"intent": action_point.intent, "result": result},

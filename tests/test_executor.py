@@ -1,5 +1,9 @@
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from typing import Any
 
+from app.db import Base
 from approval.gate import approve
 from audit.log import AuditLogModel
 from executor.run import ExecutionFailed, ExecutionNotAllowed, execute
@@ -64,9 +68,55 @@ def test_execute_is_atomic_with_audit_write(db_session, monkeypatch) -> None:
     with pytest.raises(RuntimeError):
         execute(db_session, row)
 
-    db_session.expire_all()
+    db_session.rollback()  # simulates the DB rolling back a transaction closed mid-write
     fresh = db_session.get(ActionPointModel, row.id)
     assert fresh.status == ActionPointStatus.APPROVED.value
     assert fresh.execution_result is None
     events = db_session.query(AuditLogModel).filter_by(action_point_id=row.id).all()
     assert [e.event_type for e in events] == ["APPROVED"]
+
+
+def test_concurrent_execute_runs_integration_once(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    def counting_handler(action_point: ActionPointModel) -> dict[str, Any]:
+        calls.append(action_point.id)
+        return {"status": "scheduled"}
+
+    monkeypatch.setattr("executor.run.MOCK_INTEGRATIONS", {"schedule_meeting": counting_handler})
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'race_execute.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine)
+    s1 = sessionmaker(bind=engine, expire_on_commit=False)()
+    s2 = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        intent_result = IntentResult(intent="schedule_meeting", risk_level=RiskLevel.LOW)
+        action_point = build_action_point("schedule a meeting", 0.9, intent_result)
+        row = ActionPointModel(**action_point.model_dump())
+        s1.add(row)
+        s1.commit()
+
+        row_a = s1.get(ActionPointModel, row.id)
+        approve(s1, row_a, approver="alice")
+
+        row_b = s2.get(ActionPointModel, row.id)
+        s2.commit()  # release s2's read lock; row_b is now a stale APPROVED snapshot
+
+        executed = execute(s1, row_a)
+        assert executed.status == ActionPointStatus.EXECUTED.value
+
+        with pytest.raises(ExecutionNotAllowed):
+            execute(s2, row_b)
+
+        assert len(calls) == 1
+        executed_events = (
+            s1.query(AuditLogModel).filter_by(action_point_id=row.id, event_type="EXECUTED").all()
+        )
+        assert len(executed_events) == 1
+    finally:
+        s1.close()
+        s2.close()
+        engine.dispose()
