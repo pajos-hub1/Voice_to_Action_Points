@@ -20,8 +20,11 @@ def test_happy_path_transcribe_to_audit(client) -> None:
 
     execute_response = client.post(f"/action-points/{action_point_id}/execute")
     assert execute_response.status_code == 200
-    assert execute_response.json()["status"] == "EXECUTED"
-    assert execute_response.json()["execution_result"] is not None
+    executed_body = execute_response.json()
+    assert executed_body["status"] == "EXECUTED"
+    assert executed_body["execution_result"] is not None
+    assert executed_body["execution_result"]["attendees"] == "the design team"
+    assert executed_body["execution_result"]["when"] == "tomorrow 3pm"
 
     audit_response = client.get(f"/audit-log?action_point_id={action_point_id}")
     event_types = [entry["event_type"] for entry in audit_response.json()]

@@ -19,23 +19,44 @@ class ExecutionFailed(RuntimeError):
 
 
 def _handle_send_email(action_point: ActionPointModel) -> dict[str, Any]:
-    return {"status": "sent", "message_id": f"mock-email-{action_point.id[:8]}"}
+    return {
+        "status": "sent",
+        "message_id": f"mock-email-{action_point.id[:8]}",
+        "to": action_point.entities.get("recipient"),
+    }
 
 
 def _handle_schedule_meeting(action_point: ActionPointModel) -> dict[str, Any]:
-    return {"status": "scheduled", "event_id": f"mock-event-{action_point.id[:8]}"}
+    return {
+        "status": "scheduled",
+        "event_id": f"mock-event-{action_point.id[:8]}",
+        "attendees": action_point.entities.get("attendees"),
+        "when": action_point.entities.get("when"),
+    }
 
 
 def _handle_create_ticket(action_point: ActionPointModel) -> dict[str, Any]:
-    return {"status": "created", "ticket_id": f"mock-ticket-{action_point.id[:8]}"}
+    return {
+        "status": "created",
+        "ticket_id": f"mock-ticket-{action_point.id[:8]}",
+        "title": action_point.entities.get("title"),
+    }
 
 
 def _handle_delete_resource(action_point: ActionPointModel) -> dict[str, Any]:
-    return {"status": "deleted", "resource": action_point.entities.get("raw_transcript", "")}
+    return {
+        "status": "deleted",
+        "resource": action_point.entities.get("resource") or action_point.entities.get("raw_transcript", ""),
+    }
 
 
 def _handle_process_payment(action_point: ActionPointModel) -> dict[str, Any]:
-    return {"status": "paid", "transaction_id": f"mock-txn-{action_point.id[:8]}"}
+    return {
+        "status": "paid",
+        "transaction_id": f"mock-txn-{action_point.id[:8]}",
+        "payee": action_point.entities.get("payee"),
+        "amount": action_point.entities.get("amount"),
+    }
 
 
 MOCK_INTEGRATIONS: dict[str, Callable[[ActionPointModel], dict[str, Any]]] = {

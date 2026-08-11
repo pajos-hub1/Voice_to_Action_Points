@@ -133,4 +133,12 @@ No code changes needed — both backends are selected via a factory behind a sha
 docker compose up --build
 ```
 
-Runs the app against the bundled Postgres service. Set `DATABASE_URL=postgresql://voice_to_action_points:voice_to_action_points@db:5432/voice_to_action_points` in `.env` to use it instead of the default SQLite file.
+Local development only: this automatically loads `docker-compose.override.yml`, which bind-mounts your source tree and runs uvicorn with `--reload`, so edits apply without rebuilding.
+
+For production, deploy the baked image without the override so the container runs exactly what was built:
+
+```bash
+docker compose -f docker-compose.yml up --build
+```
+
+Both run the app against the bundled Postgres service. Set `DATABASE_URL=postgresql://voice_to_action_points:voice_to_action_points@db:5432/voice_to_action_points` in `.env` to use it instead of the default SQLite file.

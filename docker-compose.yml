@@ -1,3 +1,7 @@
+# Production base file: the app service runs the image exactly as built, with no
+# source bind-mount. Local-dev hot-reload lives in docker-compose.override.yml,
+# which Compose loads automatically on `docker compose up` (and which production
+# deployments exclude so the baked image is what actually runs).
 services:
   app:
     build: .
@@ -7,8 +11,6 @@ services:
       - .env
     depends_on:
       - db
-    volumes:
-      - .:/app
 
   # Optional Postgres for when DATABASE_URL is switched over from SQLite.
   # Unused while the app runs on the default sqlite:/// connection string.

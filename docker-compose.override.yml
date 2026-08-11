@@ -1,0 +1,11 @@
+# Local development only — Compose merges this file in automatically on
+# `docker compose up` (and every variant that doesn't pass an explicit -f list).
+# It bind-mounts the source tree and enables --reload so code changes apply
+# without rebuilding the image. Production deployments must run the base file
+# alone, e.g. `docker compose -f docker-compose.yml up`, so the baked image runs
+# exactly as built.
+services:
+  app:
+    volumes:
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

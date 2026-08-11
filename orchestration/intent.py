@@ -1,4 +1,5 @@
 import json
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -47,14 +48,101 @@ class IntentExtractor(ABC):
         """Classify intent and extract entities from a transcript (blocking; run off the event loop)."""
 
 
+# --- Deterministic entity parsing for the mock backend ---------------------------------
+# Pulls structured fields (attendees, when, recipient, amount, ...) out of the transcript
+# with simple heuristics, so downstream mock integrations get real data to work with.
+# The OpenAI backend replaces this entirely when INTENT_BACKEND=openai.
+
+_STOP_WORDS = re.compile(r"\b(?:for|at|on|about|regarding|concerning)\b", re.IGNORECASE)
+
+
+def _phrase_after(transcript: str, *anchors: str) -> str | None:
+    """Return the phrase after the first matching anchor, truncated at a stop word or ,;."""
+    pattern = re.compile(
+        r"\b(?:%s)\s+([\w][^,;.]*)" % "|".join(re.escape(a) for a in anchors),
+        re.IGNORECASE,
+    )
+    match = pattern.search(transcript)
+    if match is None:
+        return None
+    phrase = _STOP_WORDS.split(match.group(1).strip())[0].strip()
+    return phrase or None
+
+
+_DAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_RELATIVE_DAYS = ("today", "tomorrow", "yesterday")
+_WEEK_PHRASES = ("next week", "this week")
+_TIME_RE = re.compile(r"\b(\d{1,2}(?::\d{2})?\s?(?:am|pm|a\.m\.|p\.m\.))\b", re.IGNORECASE)
+
+
+def _extract_when(transcript: str) -> str | None:
+    lowered = transcript.lower()
+    parts: list[str] = []
+    for phrase in _WEEK_PHRASES:
+        if phrase in lowered:
+            parts.append(phrase)
+            break
+    for token in (*_RELATIVE_DAYS, *_DAY_NAMES):
+        if token in lowered:
+            parts.append(token)
+            break
+    match = _TIME_RE.search(transcript)
+    if match is not None:
+        parts.append(match.group(1))
+    return " ".join(parts) if parts else None
+
+
+_AMOUNT_RE = re.compile(r"\$\s?\d+(?:\.\d{2})?|\b\d+(?:\.\d{2})?\s?(?:dollars?|usd)\b", re.IGNORECASE)
+
+
+def _extract_amount(transcript: str) -> str | None:
+    match = _AMOUNT_RE.search(transcript)
+    return match.group(0) if match is not None else None
+
+
+def extract_entities(transcript: str, intent: str) -> dict[str, Any]:
+    entities: dict[str, Any] = {"raw_transcript": transcript}
+    if intent == "send_email":
+        recipient = _phrase_after(transcript, "to")
+        if recipient is not None:
+            entities["recipient"] = recipient
+    elif intent == "schedule_meeting":
+        attendees = _phrase_after(transcript, "with", "attendees")
+        if attendees is not None:
+            entities["attendees"] = attendees
+        when = _extract_when(transcript)
+        if when is not None:
+            entities["when"] = when
+    elif intent == "create_ticket":
+        title = _phrase_after(transcript, "ticket for", "ticket about")
+        if title is not None:
+            entities["title"] = title
+    elif intent == "delete_resource":
+        resource = _phrase_after(transcript, "delete", "remove")
+        if resource is not None:
+            entities["resource"] = resource
+    elif intent == "process_payment":
+        payee = _phrase_after(transcript, "to", "for")
+        if payee is not None:
+            entities["payee"] = payee
+        amount = _extract_amount(transcript)
+        if amount is not None:
+            entities["amount"] = amount
+    return entities
+
+
 class MockIntentExtractor(IntentExtractor):
-    """Deterministic keyword-based extractor, so the app runs with zero credentials."""
+    """Deterministic keyword + entity extraction, so the app runs with zero credentials."""
 
     def extract(self, transcript: str) -> IntentResult:
         lowered = transcript.lower()
         for keyword, intent, risk in KEYWORD_RULES:
             if keyword in lowered:
-                return IntentResult(intent=intent, entities={"raw_transcript": transcript}, risk_level=risk)
+                return IntentResult(
+                    intent=intent,
+                    entities=extract_entities(transcript, intent),
+                    risk_level=risk,
+                )
         return IntentResult(intent=DEFAULT_INTENT, entities={"raw_transcript": transcript}, risk_level=RiskLevel.LOW)
 
 
