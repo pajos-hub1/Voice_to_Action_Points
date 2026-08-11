@@ -3,7 +3,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import get_settings
 from app.db import init_db
 from app.middleware import log_request_latency
 from app.routers import action_points, approval, audit, execute, transcribe
@@ -25,6 +27,14 @@ app = FastAPI(
 )
 
 app.middleware("http")(log_request_latency)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().cors_origin_list,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(transcribe.router)
 app.include_router(action_points.router)

@@ -112,6 +112,20 @@ curl -s "localhost:8000/audit-log?action_point_id=$ID"
 
 Other useful endpoints: `GET /action-points` (list, optional `?status_filter=`), `GET /action-points/{id}` (detail), `GET /audit-log` (all events, no filter).
 
+## Frontend
+
+A React + TypeScript + Vite SPA in [`frontend/`](./frontend) covers the same pipeline as the curl walkthrough above: record from the mic or upload an audio file, review/edit the transcript, create an Action Point, approve/reject it, execute it, and see the audit trail — all from the browser.
+
+```bash
+# with the backend already running on :8000
+cd frontend
+npm install
+cp .env.example .env   # VITE_API_BASE_URL=http://localhost:8000
+npm run dev             # http://localhost:5173
+```
+
+The backend allows CORS requests from `http://localhost:5173` by default (`CORS_ORIGINS` in `.env`); update it if you serve the frontend from elsewhere. Real-time streaming transcription (`/transcribe/stream`) isn't wired into the UI yet — the frontend uses the file-upload `/transcribe` endpoint.
+
 ## Switching to real Azure Speech / OpenAI
 
 Set in `.env`:
